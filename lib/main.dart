@@ -1,12 +1,17 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:streaming_shared_preferences/streaming_shared_preferences.dart';
 
 import 'host.dart';
 import 'hostView/hostView.dart';
 
-void main() {
+late final StreamingSharedPreferences preferences;
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  preferences = await StreamingSharedPreferences.instance;
+
   runApp(MyApp());
 }
 
@@ -34,72 +39,113 @@ class HomePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text("Hekate"),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.add),
+            tooltip: "Add host",
+            onPressed: () {
+              addHost(context);
+            },
+          ),
+        ],
       ),
       body: Center(
-        child: FutureBuilder<List<Host>>(
-          future: Future.value([
-            Host(
-              label: "fubuki",
-              host: "172.24.0.1",
-              password: "letmein",
-            ),
-            Host(
-              label: "tetsuya",
-              host: "172.24.0.2",
-              password: "letmein",
-            ),
-            Host(
-              label: "nagumo",
-              host: "172.24.0.3",
-              password: "letmein",
-            ),
-            Host(
-              label: "sinon",
-              host: "172.24.0.6",
-              password: "letmein",
-            ),
-          ]),
-          builder: (BuildContext context, AsyncSnapshot<dynamic> snapshot) {
-            if (snapshot.hasData) {
-              final hosts = snapshot.data!;
-              return ListView.builder(
-                itemCount: hosts.length,
-                itemBuilder: (context, idx) {
-                  return HostListTile(hosts[idx]);
-                },
-              );
-            } else {
-              return Center(
-                child: CircularProgressIndicator(),
-              );
-            }
-          },
+        child: PreferenceBuilder<List<Host>>(
+          preference: preferences.getCustomValue(
+            "hosts",
+            defaultValue: [],
+            adapter: Host.prefAdapter,
+          ),
+          builder: (context, hosts) => ListView.builder(
+            itemCount: hosts.length,
+            itemBuilder: (context, idx) {
+              return HostListTile(hosts[idx]);
+            },
+          ),
         ),
       ),
     );
   }
 
-  Future<String?> askFor(String title, BuildContext context) {
-    return showDialog<String>(
+  Future<void> addHost(BuildContext context) {
+    return showDialog(
       context: context,
-      barrierDismissible: false, // user must tap button!
       builder: (BuildContext context) {
-        final ctrl = TextEditingController();
+        final formKey = GlobalKey<FormState>();
 
-        return AlertDialog(
-          title: Text(title),
-          content: TextField(
-            autofocus: true,
-            maxLines: 20,
+        final ctrlName = TextEditingController();
+        final ctrlHost = TextEditingController();
+        final ctrlPort = TextEditingController(text: "8080");
+        final ctrlPassword = TextEditingController();
+
+        return Form(
+          key: formKey,
+          child: AlertDialog(
+            title: Text("Add host"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: ctrlName,
+                  autofocus: true,
+                  decoration: InputDecoration(labelText: "Name"),
+                  textInputAction: TextInputAction.next,
+                  validator: (input) =>
+                      input?.isEmpty == true ? "Please enter a name" : null,
+                ),
+                TextFormField(
+                  controller: ctrlHost,
+                  decoration: InputDecoration(labelText: "Host"),
+                  textInputAction: TextInputAction.next,
+                  validator: (input) =>
+                      input?.isEmpty == true ? "Please enter a host" : null,
+                ),
+                TextFormField(
+                  controller: ctrlPort,
+                  decoration: InputDecoration(labelText: "Port"),
+                  textInputAction: TextInputAction.next,
+                  validator: (input) {
+                    final port = int.tryParse(input ?? "");
+                    if (port == null) {
+                      return "Please enter a valid port number";
+                    } else if (port > 65535) {
+                      return "Port numbers don't go past 65535";
+                    }
+                  },
+                ),
+                TextFormField(
+                  controller: ctrlPassword,
+                  decoration: InputDecoration(labelText: "Password"),
+                  obscureText: true,
+                  onEditingComplete: () async {
+                    if (!formKey.currentState!.validate()) {
+                      return;
+                    }
+
+                    final hosts = preferences
+                        .getCustomValue<List<Host>>(
+                          "hosts",
+                          defaultValue: [],
+                          adapter: Host.prefAdapter,
+                        )
+                        .getValue();
+
+                    hosts.add(Host(
+                      label: ctrlName.text,
+                      host: ctrlHost.text,
+                      port: int.parse(ctrlPort.text),
+                      password: ctrlPassword.text,
+                    ));
+
+                    await preferences.setCustomValue("hosts", hosts,
+                        adapter: Host.prefAdapter);
+
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            ),
           ),
-          actions: <Widget>[
-            TextButton(
-              child: Text("Submit"),
-              onPressed: () {
-                Navigator.of(context).pop(ctrl.text);
-              },
-            )
-          ],
         );
       },
     );
@@ -113,54 +159,100 @@ class HostListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final node = FocusNode();
+
     return FutureBuilder<dynamic>(
-        future: host.ping(),
-        builder: (context, snapshot) {
-          print(host.host);
-          print(snapshot.data);
-          print(snapshot.error);
+      future: host.ping(),
+      builder: (context, snapshot) {
+        print(host.host);
+        print(snapshot.data);
+        print(snapshot.error);
 
-          final hasEither = snapshot.hasData || snapshot.hasError;
+        final hasEither = snapshot.hasData || snapshot.hasError;
 
-          return ListTile(
-            title: Text(
-              host.label,
-              style: TextStyle(
-                fontFamily: "Hack",
+        return ListTile(
+          focusNode: node,
+          title: Text(
+            host.label,
+            style: TextStyle(
+              fontFamily: "Hack",
+            ),
+          ),
+          minLeadingWidth: 24,
+          leading: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                Icons.language,
+                color: (snapshot.hasData)
+                    ? Colors.greenAccent
+                    : (snapshot.hasError)
+                        ? Colors.redAccent
+                        : Colors.grey,
               ),
-            ),
-            minLeadingWidth: 24,
-            leading: Stack(
-              alignment: Alignment.center,
-              children: [
-                Icon(
-                  Icons.language,
-                  color: (snapshot.hasData)
-                      ? Colors.greenAccent
-                      : (snapshot.hasError)
-                          ? Colors.redAccent
-                          : Colors.grey,
-                ),
-                if (!hasEither)
-                  Container(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1,
-                    ),
+              if (!hasEither)
+                Container(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1,
                   ),
+                ),
+            ],
+          ),
+          onTap: snapshot.hasData
+              ? () async {
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (context) {
+                      return HostView(host);
+                    },
+                  ));
+                }
+              : null,
+          onLongPress: () async {
+            final RenderBox tile = context.findRenderObject()! as RenderBox;
+            final RenderBox overlay = Navigator.of(context)
+                .overlay!
+                .context
+                .findRenderObject()! as RenderBox;
+
+            final RelativeRect position = RelativeRect.fromRect(
+              Rect.fromPoints(
+                tile.localToGlobal(Offset.fromDirection(0), ancestor: overlay),
+                tile.localToGlobal(tile.size.bottomRight(Offset.zero),
+                    ancestor: overlay),
+              ),
+              Offset.zero & overlay.size,
+            );
+
+            final result = await showMenu(
+              context: context,
+              position: position,
+              items: [
+                PopupMenuItem(
+                  child: Text("Delete"),
+                  value: "delete",
+                ),
               ],
-            ),
-            onTap: snapshot.hasData
-                ? () async {
-                    Navigator.of(context).push(MaterialPageRoute(
-                      builder: (context) {
-                        return HostView(host);
-                      },
-                    ));
-                  }
-                : null,
-          );
-        });
+            );
+
+            if (result == "delete") {
+              final hosts = preferences
+                  .getCustomValue<List<Host>>(
+                    "hosts",
+                    defaultValue: [],
+                    adapter: Host.prefAdapter,
+                  )
+                  .getValue();
+
+              hosts.removeWhere((el) => el.host == host.host);
+
+              await preferences.setCustomValue("hosts", hosts,
+                  adapter: Host.prefAdapter);
+            }
+          },
+        );
+      },
+    );
   }
 }

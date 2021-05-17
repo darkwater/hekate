@@ -1,7 +1,10 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/io_client.dart' as http;
 import 'dart:convert';
+
+import 'package:streaming_shared_preferences/streaming_shared_preferences.dart';
 
 class Host {
   final String label;
@@ -20,11 +23,35 @@ class Host {
           ..badCertificateCallback =
               (X509Certificate cert, String host, int port) => true);
 
+  factory Host.fromMap(Map<String, dynamic> m) {
+    return Host(
+      label: m["label"],
+      host: m["host"],
+      port: m["port"],
+      password: m["password"],
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      "label": label,
+      "host": host,
+      "port": port,
+      "password": password,
+    };
+  }
+
+  static final prefAdapter = JsonAdapter<List<Host>>(
+    serializer: (hosts) => hosts.map((host) => host.toMap()).toList(),
+    deserializer: (json) =>
+        (json as List<dynamic>).map((host) => Host.fromMap(host)).toList(),
+  );
+
   Uri _at(String path) {
     return Uri(
       host: host,
       port: port,
-      scheme: "https",
+      scheme: kReleaseMode ? "https" : "http",
       path: path,
       userInfo: ":$password",
     );
